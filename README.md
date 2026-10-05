@@ -9,12 +9,28 @@
 | Network | GenLayer Studio Next |
 | Chain ID | `61997` (`0xF22D`) |
 | RPC | `https://studio-dev.genlayer.com/api` |
-| Explorer | `https://explorer-studio-dev.genlayer.com` |
-| Contract address | `<CONTRACT_ADDRESS>` |
-| Deploy tx | `<DEPLOY_TX>` |
-| Settle tx (consensus adjudication) | `<SETTLE_TX>` |
-| App | `<APP_URL>` (frontend with `VITE_NETWORK=studionext`) |
+| Explorer | https://explorer-studio-dev.genlayer.com |
+| GenVM runner | `py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng` (GenVM v0.6) |
+| **Contract address** | [`0x3885D8372dc16321FcC6686Fe996Dd934bD17c6f`](https://explorer-studio-dev.genlayer.com/address/0x3885D8372dc16321FcC6686Fe996Dd934bD17c6f) |
+| Deploy tx | [`0x3e3578cc…90c6`](https://explorer-studio-dev.genlayer.com/tx/0x3e3578cce5a49d5af00ba60c974521b234a53e2ed416111367fc873915b290c6) |
+| App | `<APP_URL>` (frontend built with `VITE_NETWORK=studionext`) |
 | Demo video | `<DEMO_VIDEO_URL>` |
+
+### Transactions showing the consensus adjudication flow
+
+Each `settle` below ran the judgment as a leader/validator block. The leader
+and five validators used different LLMs (GPT, Claude, Gemini, DeepSeek, …),
+and the result was `MAJORITY_AGREE` on the outcome.
+
+| Task | Evidence | Outcome | `settle` tx |
+|------|----------|---------|-------------|
+| `demo-1791202053612` | correct two-sentence summary | **APPROVED** → worker paid reward + stake | [`0x2d0b76d7…96b5`](https://explorer-studio-dev.genlayer.com/tx/0x2d0b76d792f260aa800e9abd45b274497635b5d1434463859b51fa7fa8a196b5) |
+| `demo-1791202122037` | `"Bananas are yellow."` | **REJECTED** → requester gets reward + stake | [`0x59a02df2…df3a`](https://explorer-studio-dev.genlayer.com/tx/0x59a02df20b623390761be5f985adbf79d7665247e460ef66f35752245930df3a) |
+
+Full lifecycle of the APPROVED task: create [`0xe801eb32…4908`](https://explorer-studio-dev.genlayer.com/tx/0xe801eb32b6a8891efc62c3e6c3ae4fb2d1744890365c9f9c657a4306dfbb4908)
+→ accept [`0x2211bc12…3dd9`](https://explorer-studio-dev.genlayer.com/tx/0x2211bc126613b401564f6e3cc5e6ad472a59f2d60ea39701987685d897a83dd9)
+→ submit [`0xdc1d9747…b22f`](https://explorer-studio-dev.genlayer.com/tx/0xdc1d97473f2750f9fec3219c11f275c0a9aa4d3ea34c07d352aa9edf81aeb22f)
+→ settle [`0x2d0b76d7…96b5`](https://explorer-studio-dev.genlayer.com/tx/0x2d0b76d792f260aa800e9abd45b274497635b5d1434463859b51fa7fa8a196b5).
 
 The deployed source is exactly `contracts/agent_arbiter.py` in this repo.
 
@@ -34,7 +50,7 @@ report actually meets a natural-language spec. This contract:
 - **Fetches nothing** — the evidence is self-describing and committed by the
   worker (immutable once submitted), so validators have stable input to judge.
 - **Judges with an LLM** via `gl.nondet.exec_prompt` inside a
-  leader/validator block (`gl.vm.run_nondet`), so the verdict is the result
+  leader/validator block (`gl.vm.run_nondet_default`), so the verdict is the result
   of GenLayer consensus, not a single node's opinion.
 - **Settles deterministically** — the escrow math is pure code, so the money
   movement is fully predictable once the verdict is accepted.
@@ -84,7 +100,10 @@ worker loses their stake, and a dishonest requester has real money locked up.
 ### The adjudicator (consensus path)
 
 `settle` never calls the LLM directly. It calls `_judge`, which runs the
-judgment through GenLayer consensus with `gl.vm.run_nondet(leader_fn, validator_fn)`:
+judgment through GenLayer consensus with `gl.vm.run_nondet_default(leader_fn, validator_fn)`.
+
+It uses `gl.vm.run_nondet_default`, the GenVM v0.6 API that runs the
+validator inside a sandbox and compares errors on both sides.
 
 1. **Leader** — runs the strict JSON-only prompt (spec + criteria + evidence)
    with `gl.nondet.exec_prompt` and normalizes the answer to
@@ -103,7 +122,7 @@ judgment through GenLayer consensus with `gl.vm.run_nondet(leader_fn, validator_
 
 ```
 settle(task_id)
-  └─ _judge() ── gl.vm.run_nondet
+  └─ _judge() ── gl.vm.run_nondet_default
         ├─ leader_fn:    exec_prompt → normalize → {outcome, reasoning}
         └─ validator_fn: exec_prompt → normalize → outcome == leader.outcome ?
   └─ outcome in {APPROVED, REJECTED, UNDETERMINED} ? → pay out → SETTLED
@@ -149,12 +168,18 @@ python -m venv .venv
 .venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 
-pytest tests/direct/ -v        # fast, in-memory (~2s)
-genvm-lint check contracts/agent_arbiter.py   # static analysis
+python -m pytest tests/direct/ -v                  # fast, in-memory, GenVM v0.6 SDK
+GENVM_VERSION=v0.6.0-rc3 genvm-lint check contracts/agent_arbiter.py
 ```
 
 The direct-mode runner downloads the GenVM contract SDK from GitHub releases
-on first run and caches it under `~/.cache/gltest-direct`.
+on first run and caches it under `~/.cache/gltest-direct`. Python 3.12+ is
+required.
+
+`genvm-lint`'s semantic validation passes against the v0.6 SDK. Its AST
+lint rules still only know the older names (`@allow_storage`,
+`gl.vm.run_nondet`). Because of that, it reports two false positives for
+`@gl.storage.allow` and `gl.vm.run_nondet_default`.
 
 ## Frontend
 
@@ -200,9 +225,9 @@ node scripts/smoke.mjs <contract-address>
 npm run build                # deploy dist/ to any static host (Vercel, Netlify…)
 ```
 
-You can also deploy from the Studio Next web UI: open the Studio at
-`studio-dev.genlayer.com`, paste `contracts/agent_arbiter.py`, deploy, and copy
-the address into `.env.local`.
+The scripts use `genlayer-js` 2.0.0-rc.1 (`studioDevnet` preset). Every
+transaction carries a fee distribution derived from the network's fee
+policy; without it Studio Next reverts with `FeesDistributionMissing`.
 
 All scripts default to Studio Next; set `NETWORK=localnet` (or `testnet`)
 to target another network.
@@ -290,6 +315,7 @@ PRIVATE_KEY=0x<faucet-funded key> NETWORK=testnet node scripts/deploy.mjs
 - [x] Frontend (Vite + React, genlayer-js, custom design system)
 - [x] End-to-end deploy + smoke test on glsim localnet
 - [x] Autonomous agents (requester + worker) with 3D animated UI
-- [x] Adjudication through leader/validator consensus (`gl.vm.run_nondet`)
-- [ ] Studio Next (chain 61997) deployment + demo video
+- [x] Adjudication through leader/validator consensus (`gl.vm.run_nondet_default`)
+- [x] Studio Next (chain 61997) deployment + on-chain APPROVED/REJECTED settlements
+- [ ] Demo video
 - [ ] Testnet Bradbury deployment

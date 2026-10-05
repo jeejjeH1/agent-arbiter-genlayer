@@ -1,20 +1,18 @@
 import { createClient, createAccount, generatePrivateKey } from 'genlayer-js'
-import { localnet, testnetBradbury, studionet } from 'genlayer-js/chains'
+import { localnet, testnetBradbury, studionet, studioDevnet } from 'genlayer-js/chains'
 import type { GenLayerClient } from 'genlayer-js/types'
 
 export type NetworkId = 'studionext' | 'localnet' | 'testnet' | 'studionet'
 
-// GenLayer Studio Next (chain 61997). genlayer-js 1.x only ships the older
-// studionet preset (61999, studio.genlayer.com), so define it explicitly.
+// GenLayer Studio Next (chain 61997, studio-dev.genlayer.com) is the
+// `studioDevnet` preset in genlayer-js 2.x; add its explorer for tx links.
 export const studioNext = {
-  ...studionet,
-  id: 61997,
+  ...studioDevnet,
   name: 'GenLayer Studio Next',
-  rpcUrls: { default: { http: ['https://studio-dev.genlayer.com/api'] } },
   blockExplorers: {
     default: { name: 'Studio Next Explorer', url: 'https://explorer-studio-dev.genlayer.com' },
   },
-} as typeof studionet
+} as typeof studioDevnet
 
 const CHAINS = {
   studionext: studioNext,
@@ -30,9 +28,10 @@ export const NETWORK_LABEL: Record<NetworkId, string> = {
   studionet: 'Studionet (legacy)',
 }
 
+// Defaults to the AgentArbiter deployed on Studio Next (chain 61997).
 const CONTRACT_ADDRESS =
   import.meta.env.VITE_CONTRACT_ADDRESS ??
-  '0x0000000000000000000000000000000000000000'
+  '0x3885D8372dc16321FcC6686Fe996Dd934bD17c6f'
 
 const ACCOUNT_KEY = 'agent-arbiter:privateKey'
 

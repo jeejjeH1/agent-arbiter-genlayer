@@ -4,7 +4,7 @@
 //   NETWORK=localnet node scripts/deploy.mjs      # local glsim
 //   PRIVATE_KEY=0x... node scripts/deploy.mjs     # reuse a funded account
 import { readFileSync } from 'node:fs'
-import { makeAccount, makeClient, fund, explorerTx, NETWORK, NETWORK_ID } from './lib.mjs'
+import { makeAccount, makeClient, fund, estimateFees, explorerTx, NETWORK, NETWORK_ID } from './lib.mjs'
 
 const CONTRACT_PATH = new URL('../../contracts/agent_arbiter.py', import.meta.url)
 
@@ -21,14 +21,20 @@ async function main() {
   const txHash = await client.deployContract({
     code,
     args: [],
-    consensusMaxRotations: 3,
+    fees: await estimateFees(client),
   })
   console.log('Deploy tx:', txHash)
 
   const receipt = await client.waitForTransactionReceipt({
     hash: txHash,
-    status: 'FINALIZED',
+    waitUntil: 'decided',
+    retries: 300,
+    interval: 3000,
   })
+  if (receipt.txExecutionResultName === 'FINISHED_WITH_ERROR') {
+    console.error('Deployment failed inside GenVM (constructor error). Tx:', txHash)
+    process.exit(1)
+  }
 
   const contractAddress =
     receipt.recipient ??

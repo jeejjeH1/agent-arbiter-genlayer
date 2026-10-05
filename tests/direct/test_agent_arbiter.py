@@ -7,14 +7,21 @@ from tests.direct.conftest import to_hex
 FUTURE = "2099-12-31T00:00:00Z"
 
 
-def _judge_mock(vm, approved=False, undetermined=False):
+def _llm_json(obj):
+    # The direct runner json-decodes string mocks once, while GenVM v0.6's
+    # exec_prompt(response_format="json") expects the raw JSON *text*, so
+    # encode twice to hand the SDK the text a real LLM would return.
+    return json.dumps(json.dumps(obj))
+
+
+def _judge_mock(vm, approved=False, undetermined=False, reasoning="mock verdict"):
     vm.mock_llm(
         r".*impartial adjudicator.*",
-        json.dumps(
+        _llm_json(
             {
                 "approved": approved,
                 "undetermined": undetermined,
-                "reasoning": "mock verdict",
+                "reasoning": reasoning,
             }
         ),
     )
@@ -299,10 +306,7 @@ def test_validator_ignores_reasoning_wording(direct_vm, direct_deploy, direct_al
     contract.settle("t1")
 
     direct_vm.clear_mocks()
-    direct_vm.mock_llm(
-        r".*impartial adjudicator.*",
-        json.dumps({"approved": True, "undetermined": False, "reasoning": "different words"}),
-    )
+    _judge_mock(direct_vm, approved=True, reasoning="different words")
     assert direct_vm.run_validator() is True
 
 
@@ -328,7 +332,7 @@ def test_validator_rejects_invalid_leader_outcome(direct_vm, direct_deploy, dire
 
 def test_settle_reverts_on_malformed_llm_output(direct_vm, direct_deploy, direct_alice, direct_bob):
     contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
-    direct_vm.mock_llm(r".*impartial adjudicator.*", json.dumps({"verdict": "yes"}))
+    direct_vm.mock_llm(r".*impartial adjudicator.*", _llm_json({"verdict": "yes"}))
 
     with direct_vm.expect_revert("missing boolean decision fields"):
         contract.settle("t1")

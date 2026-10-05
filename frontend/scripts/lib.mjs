@@ -5,15 +5,13 @@
 // localnet/Studio; pass funded keys (PRIVATE_KEY, REQUESTER_KEY, WORKER_KEY)
 // to reuse an existing account.
 import { createClient, createAccount, generatePrivateKey } from 'genlayer-js'
-import { localnet, studionet, testnetBradbury } from 'genlayer-js/chains'
+import { localnet, studioDevnet, testnetBradbury } from 'genlayer-js/chains'
 
-// GenLayer Studio Next (chain 61997). genlayer-js 1.x only ships the older
-// studionet preset (61999, studio.genlayer.com), so define it explicitly.
+// GenLayer Studio Next (chain 61997, studio-dev.genlayer.com) is the
+// `studioDevnet` preset in genlayer-js 2.x; add its explorer for tx links.
 export const studioNext = {
-  ...studionet,
-  id: 61997,
+  ...studioDevnet,
   name: 'GenLayer Studio Next',
-  rpcUrls: { default: { http: ['https://studio-dev.genlayer.com/api'] } },
   blockExplorers: {
     default: { name: 'Studio Next Explorer', url: 'https://explorer-studio-dev.genlayer.com' },
   },
@@ -41,13 +39,30 @@ export function explorerTx(hash) {
 
 export async function fund(client, address, gen = 100) {
   // Localnet and Studio expose sim_fundAccount; Bradbury needs the faucet.
+  // Call it over raw JSON-RPC: genlayer-js only allows fundAccount on localnet.
   if (NETWORK.id === testnetBradbury.id) return false
   try {
-    await client.fundAccount({ address, amount: Number(BigInt(gen) * 10n ** 18n) })
-    return true
+    const res = await fetch(NETWORK.rpcUrls.default.http[0], {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'sim_fundAccount',
+        params: [address, Number(BigInt(gen) * 10n ** 18n)],
+      }),
+    })
+    const body = await res.json()
+    return !body.error
   } catch {
     return false
   }
+}
+
+// Every GenLayer transaction carries a fee distribution; derive it from the
+// network's active fee policy (required on Studio Next).
+export function estimateFees(client) {
+  return client.estimateTransactionFees({})
 }
 
 export async function write(client, contract, functionName, args, value = 0n) {
@@ -56,8 +71,17 @@ export async function write(client, contract, functionName, args, value = 0n) {
     functionName,
     args,
     value,
+    fees: await estimateFees(client),
   })
-  const receipt = await client.waitForTransactionReceipt({ hash, status: 'FINALIZED' })
+  const receipt = await client.waitForTransactionReceipt({
+    hash,
+    waitUntil: 'decided',
+    retries: 300,
+    interval: 3000,
+  })
+  if (receipt.txExecutionResultName === 'FINISHED_WITH_ERROR') {
+    throw new Error(`${functionName} reverted (tx ${hash})`)
+  }
   return { hash, receipt }
 }
 

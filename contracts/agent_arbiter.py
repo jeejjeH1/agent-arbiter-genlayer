@@ -1,9 +1,12 @@
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+# v0.3.0
+# { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }
 
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from genlayer import *
+
+import genlayer as gl
+from genlayer.types import *
 
 
 # Task lifecycle states.
@@ -19,7 +22,7 @@ REJECTED = "REJECTED"
 UNDETERMINED = "UNDETERMINED"
 
 
-@allow_storage
+@gl.storage.allow
 @dataclass
 class Task:
     id: str
@@ -111,7 +114,7 @@ def _is_valid_verdict(verdict) -> bool:
     )
 
 
-class AgentArbiter(gl.Contract):
+class AgentArbiter(gl.contract.Contract):
     """Two-sided escrow with AI adjudication for agent-to-agent work.
 
     The requester deposits the task reward, the worker deposits an equal
@@ -124,7 +127,7 @@ class AgentArbiter(gl.Contract):
       - UNDETERMINED -> both parties get their own deposits back.
     """
 
-    tasks: TreeMap[str, Task]
+    tasks: gl.storage.TreeMap[str, Task]
 
     def __init__(self):
         pass
@@ -140,8 +143,7 @@ class AgentArbiter(gl.Contract):
         return task
 
     def _is_past_deadline(self, deadline: str) -> bool:
-        now = datetime.now(timezone.utc)
-        return now > _parse_dt(deadline)
+        return datetime.now(timezone.utc) > _parse_dt(deadline)
 
     @gl.public.view
     def get_task(self, task_id: str) -> dict:
@@ -264,9 +266,10 @@ class AgentArbiter(gl.Contract):
             return _normalize_verdict(raw)
 
         def validator_fn(leaders_res) -> bool:
-            # Independent re-execution. If the LLM output is malformed here
-            # too, this raises the same UserError and agrees with a failed
-            # leader; otherwise a failed leader is rejected below.
+            # Independent re-execution. run_nondet_default runs this in a
+            # sandbox: if the LLM output is malformed here too, the same
+            # UserError agrees with a failed leader; any other mismatch
+            # between success and failure is a disagreement.
             mine = leader_fn()
             if not isinstance(leaders_res, gl.vm.Return):
                 return False
@@ -276,7 +279,7 @@ class AgentArbiter(gl.Contract):
             # Consensus is on the substantive decision, not the wording.
             return theirs["outcome"] == mine["outcome"]
 
-        return gl.vm.run_nondet(leader_fn, validator_fn)
+        return gl.vm.run_nondet_default(leader_fn, validator_fn)
 
     @gl.public.write
     def settle(self, task_id: str) -> None:
@@ -315,6 +318,6 @@ class AgentArbiter(gl.Contract):
 
     def _pay(self, recipient: Address, value: u256) -> None:
         try:
-            gl.get_contract_at(recipient).emit_transfer(value=value)
+            gl.contract.get_at(recipient).emit_transfer(value)
         except Exception:
             pass  # In simulation / direct mode, transfer may not complete.
