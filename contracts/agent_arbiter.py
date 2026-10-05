@@ -1,9 +1,12 @@
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+# v0.3.0
+# { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }
 
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from genlayer import *
+
+import genlayer as gl
+from genlayer.types import *
 
 
 # Task lifecycle states.
@@ -19,7 +22,7 @@ REJECTED = "REJECTED"
 UNDETERMINED = "UNDETERMINED"
 
 
-@allow_storage
+@gl.storage.allow
 @dataclass
 class Task:
     id: str
@@ -43,7 +46,75 @@ def _parse_dt(value: str) -> datetime:
     return dt
 
 
-class AgentArbiter(gl.Contract):
+def _build_prompt(spec: str, criteria: str, evidence: str) -> str:
+    return f"""
+You are an impartial adjudicator evaluating whether a completed task
+satisfies its written specification and acceptance criteria.
+
+SPECIFICATION:
+{spec}
+
+ACCEPTANCE CRITERIA:
+{criteria}
+
+SUBMITTED EVIDENCE:
+{evidence}
+
+Decide whether the evidence demonstrates that the task was completed
+according to the specification and criteria.
+
+Respond in JSON only:
+{{
+    "approved": bool,
+    "undetermined": bool,
+    "reasoning": str
+}}
+Set "approved": true only when the specification and all acceptance
+criteria are clearly satisfied by the evidence. Set "undetermined": true
+only when the evidence is too incomplete or ambiguous to judge. Otherwise
+set both to false.
+"""
+
+
+def _normalize_verdict(raw) -> dict:
+    """Turn raw LLM output into a strict verdict, or raise UserError."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raise gl.vm.UserError("LLM returned invalid JSON")
+    if not isinstance(raw, dict):
+        raise gl.vm.UserError("LLM returned a non-object verdict")
+
+    approved = raw.get("approved")
+    undetermined = raw.get("undetermined")
+    if not isinstance(approved, bool) or not isinstance(undetermined, bool):
+        raise gl.vm.UserError("LLM verdict is missing boolean decision fields")
+    if approved and undetermined:
+        raise gl.vm.UserError("LLM verdict is contradictory")
+
+    if undetermined:
+        outcome = UNDETERMINED
+    elif approved:
+        outcome = APPROVED
+    else:
+        outcome = REJECTED
+
+    reasoning = raw.get("reasoning", "")
+    if not isinstance(reasoning, str):
+        reasoning = str(reasoning)
+    return {"outcome": outcome, "reasoning": reasoning[:2000]}
+
+
+def _is_valid_verdict(verdict) -> bool:
+    return (
+        isinstance(verdict, dict)
+        and verdict.get("outcome") in (APPROVED, REJECTED, UNDETERMINED)
+        and isinstance(verdict.get("reasoning"), str)
+    )
+
+
+class AgentArbiter(gl.contract.Contract):
     """Two-sided escrow with AI adjudication for agent-to-agent work.
 
     The requester deposits the task reward, the worker deposits an equal
@@ -56,7 +127,7 @@ class AgentArbiter(gl.Contract):
       - UNDETERMINED -> both parties get their own deposits back.
     """
 
-    tasks: TreeMap[str, Task]
+    tasks: gl.storage.TreeMap[str, Task]
 
     def __init__(self):
         pass
@@ -72,8 +143,7 @@ class AgentArbiter(gl.Contract):
         return task
 
     def _is_past_deadline(self, deadline: str) -> bool:
-        now = datetime.now(timezone.utc)
-        return now > _parse_dt(deadline)
+        return datetime.now(timezone.utc) > _parse_dt(deadline)
 
     @gl.public.view
     def get_task(self, task_id: str) -> dict:
@@ -179,46 +249,37 @@ class AgentArbiter(gl.Contract):
     # ------------------------------------------------------------------
 
     def _judge(self, spec: str, criteria: str, evidence: str) -> dict:
-        fallback = {"approved": False, "undetermined": True, "reasoning": "adjudication unavailable"}
-        try:
-            prompt = f"""
-You are an impartial adjudicator evaluating whether a completed task
-satisfies its written specification and acceptance criteria.
+        """Run the adjudication through GenLayer's leader/validator consensus.
 
-SPECIFICATION:
-{spec}
+        The leader asks the LLM for a verdict and normalizes it to
+        ``{"outcome": APPROVED|REJECTED|UNDETERMINED, "reasoning": str}``.
+        Every validator independently re-runs the same prompt and only agrees
+        when its own *outcome* matches the leader's exactly; the free-text
+        reasoning is allowed to differ. A malformed LLM answer raises a
+        UserError instead of silently producing a verdict, so nothing is
+        settled on garbage output.
+        """
+        prompt = _build_prompt(spec, criteria, evidence)
 
-ACCEPTANCE CRITERIA:
-{criteria}
+        def leader_fn() -> dict:
+            raw = gl.nondet.exec_prompt(prompt, response_format="json")
+            return _normalize_verdict(raw)
 
-SUBMITTED EVIDENCE:
-{evidence}
+        def validator_fn(leaders_res) -> bool:
+            # Independent re-execution. run_nondet_default runs this in a
+            # sandbox: if the LLM output is malformed here too, the same
+            # UserError agrees with a failed leader; any other mismatch
+            # between success and failure is a disagreement.
+            mine = leader_fn()
+            if not isinstance(leaders_res, gl.vm.Return):
+                return False
+            theirs = leaders_res.calldata
+            if not _is_valid_verdict(theirs):
+                return False
+            # Consensus is on the substantive decision, not the wording.
+            return theirs["outcome"] == mine["outcome"]
 
-Decide whether the evidence demonstrates that the task was completed
-according to the specification and criteria.
-
-Respond in JSON only:
-{{
-    "approved": bool,
-    "undetermined": bool,
-    "reasoning": str
-}}
-Set "approved": true only when the specification and all acceptance
-criteria are clearly satisfied by the evidence. Set "undetermined": true
-only when the evidence is too incomplete or ambiguous to judge. Otherwise
-set both to false.
-"""
-            result = gl.nondet.exec_prompt(prompt, response_format="json")
-
-            if isinstance(result, dict) and "approved" in result:
-                return result
-            if isinstance(result, str):
-                parsed = json.loads(result)
-                if isinstance(parsed, dict) and "approved" in parsed:
-                    return parsed
-            return fallback
-        except Exception:
-            return fallback
+        return gl.vm.run_nondet_default(leader_fn, validator_fn)
 
     @gl.public.write
     def settle(self, task_id: str) -> None:
@@ -226,30 +287,29 @@ set both to false.
         if task.status != SUBMITTED:
             raise gl.vm.UserError("Task is not submitted")
 
-        spec = task.spec
-        criteria = task.criteria
-        evidence = task.evidence
+        verdict = self._judge(task.spec, task.criteria, task.evidence)
 
-        verdict = self._judge(spec, criteria, evidence)
+        # Check the substantive outcome agreed by consensus before any funds
+        # move. Anything outside the three known outcomes aborts the
+        # transaction and leaves the task SUBMITTED so settle can be retried.
+        if not _is_valid_verdict(verdict):
+            raise gl.vm.UserError("Consensus produced an invalid verdict")
 
-        task.status = SETTLED
-        approved = bool(verdict.get("approved", False))
-        undetermined = bool(verdict.get("undetermined", False))
-        task.reasoning = str(verdict.get("reasoning", ""))
-
+        outcome = verdict["outcome"]
         requester = task.requester
         worker = task.worker
         amount = task.amount
 
-        if undetermined:
-            task.outcome = UNDETERMINED
+        task.status = SETTLED
+        task.outcome = outcome
+        task.reasoning = verdict["reasoning"]
+
+        if outcome == UNDETERMINED:
             self._pay(worker, amount)
             self._pay(requester, amount)
-        elif approved:
-            task.outcome = APPROVED
+        elif outcome == APPROVED:
             self._pay(worker, amount + amount)
         else:
-            task.outcome = REJECTED
             self._pay(requester, amount + amount)
 
     # ------------------------------------------------------------------
@@ -258,6 +318,6 @@ set both to false.
 
     def _pay(self, recipient: Address, value: u256) -> None:
         try:
-            gl.get_contract_at(recipient).emit_transfer(value=value)
+            gl.contract.get_at(recipient).emit_transfer(value)
         except Exception:
             pass  # In simulation / direct mode, transfer may not complete.

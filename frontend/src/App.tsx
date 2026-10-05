@@ -7,6 +7,7 @@ import { ToastProvider, toast } from './components/Toast'
 import {
   getSession,
   getNetwork,
+  explorerTxUrl,
   shortAddress,
   formatGen,
   genToWei,
@@ -481,8 +482,9 @@ function Detail({
   async function run(fn: () => Promise<string>, ok: string) {
     setBusy(true)
     try {
-      await fn()
-      toast('ok', ok)
+      const hash = await fn()
+      toast('ok', `${ok} · tx ${hash.slice(0, 10)}…`)
+      console.info(ok, explorerTxUrl(hash) ?? hash)
       await onChanged()
     } catch (e) {
       toast('err', String(e))

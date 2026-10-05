@@ -75,6 +75,47 @@ function normalize(raw: RawTask): Task {
   }
 }
 
+// Burner accounts start empty. Localnet and Studio Next expose
+// sim_fundAccount, so top the account up once per session before the first
+// payable call. Bradbury needs the faucet instead.
+let fundAttempted = false
+async function ensureFunded(): Promise<void> {
+  if (fundAttempted) return
+  fundAttempted = true
+  const { client, address, network } = getSession()
+  if (network === 'testnet') return
+  try {
+    await fetch(client.chain.rpcUrls.default.http[0], {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'sim_fundAccount',
+        params: [address, 100 * 10 ** 18],
+      }),
+    })
+  } catch {
+    /* network may not support funding; the write will surface any balance error */
+  }
+}
+
+// GenLayer transactions carry a fee distribution; genlayer-js derives the
+// caps from the network's active fee policy.
+async function send(functionName: string, args: any[], value: bigint): Promise<string> {
+  const { client } = getSession()
+  const fees = await (client as any).estimateTransactionFees({})
+  const hash = await client.writeContract({
+    address: getContractAddress() as `0x${string}`,
+    functionName,
+    args,
+    value,
+    fees,
+  } as any)
+  await waitForResult(hash)
+  return hash
+}
+
 async function waitForResult(hash: string): Promise<void> {
   const { client } = getSession()
   const receipt = await client.waitForTransactionReceipt({
@@ -93,66 +134,23 @@ export async function createTask(params: {
   deadline: string
   rewardWei: bigint
 }): Promise<string> {
-  const { client } = getSession()
-  const address = getContractAddress()
-  const hash = await client.writeContract({
-    address: address as `0x${string}`,
-    functionName: 'create_task',
-    args: [params.id, params.spec, params.criteria, params.deadline],
-    value: params.rewardWei,
-  })
-  await waitForResult(hash)
-  return hash
+  await ensureFunded()
+  return send('create_task', [params.id, params.spec, params.criteria, params.deadline], params.rewardWei)
 }
 
 export async function acceptTask(id: string, stakeWei: bigint): Promise<string> {
-  const { client } = getSession()
-  const address = getContractAddress()
-  const hash = await client.writeContract({
-    address: address as `0x${string}`,
-    functionName: 'accept_task',
-    args: [id],
-    value: stakeWei,
-  })
-  await waitForResult(hash)
-  return hash
+  await ensureFunded()
+  return send('accept_task', [id], stakeWei)
 }
 
 export async function submitWork(id: string, evidence: string): Promise<string> {
-  const { client } = getSession()
-  const address = getContractAddress()
-  const hash = await client.writeContract({
-    address: address as `0x${string}`,
-    functionName: 'submit_work',
-    args: [id, evidence],
-    value: 0n,
-  })
-  await waitForResult(hash)
-  return hash
+  return send('submit_work', [id, evidence], 0n)
 }
 
 export async function settle(id: string): Promise<string> {
-  const { client } = getSession()
-  const address = getContractAddress()
-  const hash = await client.writeContract({
-    address: address as `0x${string}`,
-    functionName: 'settle',
-    args: [id],
-    value: 0n,
-  })
-  await waitForResult(hash)
-  return hash
+  return send('settle', [id], 0n)
 }
 
 export async function refundUnaccepted(id: string): Promise<string> {
-  const { client } = getSession()
-  const address = getContractAddress()
-  const hash = await client.writeContract({
-    address: address as `0x${string}`,
-    functionName: 'refund_unaccepted',
-    args: [id],
-    value: 0n,
-  })
-  await waitForResult(hash)
-  return hash
+  return send('refund_unaccepted', [id], 0n)
 }

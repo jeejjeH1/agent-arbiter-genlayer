@@ -17,7 +17,7 @@ if (!CONTRACT) {
   process.exit(1)
 }
 
-const account = makeAccount()
+const account = makeAccount(process.env.REQUESTER_KEY)
 const client = makeClient(account)
 
 const SPECS = [

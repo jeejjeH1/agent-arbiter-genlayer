@@ -1,12 +1,27 @@
 # AgentArbiter - Hackathon Submission Guide
 
-## سریعترین راه: Studionet (بدون نصب هیچ‌چیز)
+## شبکه‌ی درخواستی: Studio Next (chain 61997)
 
-1. باز کن: https://studio.genlayer.com
-2. اکانت خودکار با GEN رایگان ساخته میشود
-3. فایل `contracts/agent_arbiter.py` را در Studio آپلود کن
-4. Deploy کن — آدرس قرارداد را کپی کن
-5. آدرس را در `frontend/.env.local` با `VITE_NETWORK=testnet` بگذار
+- RPC: `https://studio-dev.genlayer.com/api`
+- Chain ID: `61997`
+- Explorer: `https://explorer-studio-dev.genlayer.com`
+
+```bash
+cd frontend
+npm install
+node scripts/deploy.mjs                    # آدرس قرارداد و هش تراکنش deploy را چاپ می‌کند
+node scripts/smoke.mjs <contract-address>  # کل چرخه + هش تراکنش settle (اجماع validatorها)
+```
+
+سپس در `frontend/.env.local`:
+
+```
+VITE_NETWORK=studionext
+VITE_CONTRACT_ADDRESS=<آدرس>
+```
+
+و `npm run build` و پوشه‌ی `dist/` را روی Vercel/Netlify منتشر کنید.
+آدرس قرارداد، هش‌ها، لینک اپ و لینک ویدیوی دمو را در جدول بالای `README.md` بگذارید.
 
 ## راه اصلی: Testnet Bradbury
 

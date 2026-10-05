@@ -11,7 +11,7 @@
   "dependencies": {
     "@types/three": "^0.185.4",
     "framer-motion": "^13.2.0",
-    "genlayer-js": "^1.1.8",
+    "genlayer-js": "2.0.0-rc.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.185.1"

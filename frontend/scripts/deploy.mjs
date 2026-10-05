@@ -1,38 +1,40 @@
-// Deploys the AgentArbiter contract to a running glsim (localnet) instance.
-// Usage: node scripts/deploy.mjs
+// Deploys the AgentArbiter contract.
+// Usage:
+//   node scripts/deploy.mjs                       # Studio Next (chain 61997)
+//   NETWORK=localnet node scripts/deploy.mjs      # local glsim
+//   PRIVATE_KEY=0x... node scripts/deploy.mjs     # reuse a funded account
 import { readFileSync } from 'node:fs'
-import { createClient, createAccount, generatePrivateKey } from 'genlayer-js'
-import { localnet } from 'genlayer-js/chains'
+import { makeAccount, makeClient, fund, estimateFees, explorerTx, NETWORK, NETWORK_ID } from './lib.mjs'
 
 const CONTRACT_PATH = new URL('../../contracts/agent_arbiter.py', import.meta.url)
 
 async function main() {
-  const account = createAccount(generatePrivateKey())
-  const client = createClient({ chain: localnet, account })
+  const account = makeAccount(process.env.PRIVATE_KEY)
+  const client = makeClient(account)
 
+  console.log(`Network: ${NETWORK.name} (chain ${NETWORK.id}) ${NETWORK.rpcUrls.default.http[0]}`)
   console.log('Deployer address:', account.address)
-
-  // Fund the deployer on localnet (sim_fundAccount).
-  const fundAmount = Number(10n ** 18n * 1000n) // 1000 GEN (as Number for JSON)
-  console.log('Funding account…')
-  await client.fundAccount({ address: account.address, amount: fundAmount })
-  console.log('Funded with', fundAmount, 'wei')
+  console.log('Funded:', await fund(client, account.address, 1000))
 
   const code = readFileSync(CONTRACT_PATH, 'utf8')
   console.log('Deploying AgentArbiter…')
   const txHash = await client.deployContract({
     code,
     args: [],
-    consensusMaxRotations: 3,
+    fees: await estimateFees(client),
   })
   console.log('Deploy tx:', txHash)
 
   const receipt = await client.waitForTransactionReceipt({
     hash: txHash,
-    status: 'FINALIZED',
+    waitUntil: 'decided',
+    retries: 300,
+    interval: 3000,
   })
-
-  console.log('Raw receipt:', JSON.stringify(receipt, (k, v) => typeof v === 'bigint' ? v.toString() : v, 2))
+  if (receipt.txExecutionResultName === 'FINISHED_WITH_ERROR') {
+    console.error('Deployment failed inside GenVM (constructor error). Tx:', txHash)
+    process.exit(1)
+  }
 
   const contractAddress =
     receipt.recipient ??
@@ -41,16 +43,19 @@ async function main() {
     receipt.txDataDecoded?.contractAddress
 
   if (!contractAddress) {
-    console.error('Could not resolve contract address from receipt:', receipt)
+    console.error(
+      'Could not resolve contract address from receipt:',
+      JSON.stringify(receipt, (k, v) => (typeof v === 'bigint' ? v.toString() : v), 2),
+    )
     process.exit(1)
   }
 
   console.log('\n=== AgentArbiter deployed ===')
   console.log('Address:', contractAddress)
-  console.log('Tx:', txHash)
+  console.log('Tx:', explorerTx(txHash))
   console.log('\nSet this in frontend/.env.local:')
+  console.log(`VITE_NETWORK=${NETWORK_ID}`)
   console.log(`VITE_CONTRACT_ADDRESS=${contractAddress}`)
-  console.log('VITE_NETWORK=localnet')
 }
 
 main().catch((e) => {

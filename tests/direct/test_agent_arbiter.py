@@ -7,14 +7,21 @@ from tests.direct.conftest import to_hex
 FUTURE = "2099-12-31T00:00:00Z"
 
 
-def _judge_mock(vm, approved=False, undetermined=False):
+def _llm_json(obj):
+    # The direct runner json-decodes string mocks once, while GenVM v0.6's
+    # exec_prompt(response_format="json") expects the raw JSON *text*, so
+    # encode twice to hand the SDK the text a real LLM would return.
+    return json.dumps(json.dumps(obj))
+
+
+def _judge_mock(vm, approved=False, undetermined=False, reasoning="mock verdict"):
     vm.mock_llm(
         r".*impartial adjudicator.*",
-        json.dumps(
+        _llm_json(
             {
                 "approved": approved,
                 "undetermined": undetermined,
-                "reasoning": "mock verdict",
+                "reasoning": reasoning,
             }
         ),
     )
@@ -265,6 +272,82 @@ def test_settle_requires_submitted(direct_vm, direct_deploy, direct_alice):
 
     with direct_vm.expect_revert("Task is not submitted"):
         contract.settle("t1")
+
+
+# ----------------------------------------------------------------------
+# consensus (leader / validator)
+# ----------------------------------------------------------------------
+
+
+def _submitted(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = direct_deploy("contracts/agent_arbiter.py")
+    direct_vm.sender = direct_alice
+    direct_vm.value = 100
+    contract.create_task("t1", "spec", "criteria", FUTURE)
+    direct_vm.sender = direct_bob
+    direct_vm.value = 100
+    contract.accept_task("t1")
+    contract.submit_work("t1", "evidence")
+    return contract
+
+
+def test_settle_runs_through_validator_consensus(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True)
+    contract.settle("t1")
+
+    # A validator that independently reaches the same outcome agrees.
+    assert direct_vm.run_validator() is True
+
+
+def test_validator_ignores_reasoning_wording(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True)
+    contract.settle("t1")
+
+    direct_vm.clear_mocks()
+    _judge_mock(direct_vm, approved=True, reasoning="different words")
+    assert direct_vm.run_validator() is True
+
+
+def test_validator_disagrees_on_different_outcome(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True)
+    contract.settle("t1")
+
+    # The validator's own LLM run says REJECTED -> no consensus.
+    direct_vm.clear_mocks()
+    _judge_mock(direct_vm, approved=False)
+    assert direct_vm.run_validator() is False
+
+
+def test_validator_rejects_invalid_leader_outcome(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True)
+    contract.settle("t1")
+
+    assert direct_vm.run_validator(leader_result={"outcome": "PAY_ME", "reasoning": "x"}) is False
+    assert direct_vm.run_validator(leader_error=Exception("boom")) is False
+
+
+def test_settle_reverts_on_malformed_llm_output(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    direct_vm.mock_llm(r".*impartial adjudicator.*", _llm_json({"verdict": "yes"}))
+
+    with direct_vm.expect_revert("missing boolean decision fields"):
+        contract.settle("t1")
+
+    # Nothing was settled; the task can still be adjudicated later.
+    assert contract.get_task("t1")["status"] == "SUBMITTED"
+
+
+def test_settle_reverts_on_contradictory_verdict(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True, undetermined=True)
+
+    with direct_vm.expect_revert("contradictory"):
+        contract.settle("t1")
+    assert contract.get_task("t1")["status"] == "SUBMITTED"
 
 
 # ----------------------------------------------------------------------
