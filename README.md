@@ -13,7 +13,7 @@
 | GenVM runner | `py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng` (GenVM v0.6) |
 | **Contract address** | [`0x3885D8372dc16321FcC6686Fe996Dd934bD17c6f`](https://explorer-studio-dev.genlayer.com/address/0x3885D8372dc16321FcC6686Fe996Dd934bD17c6f) |
 | Deploy tx | [`0x3e3578cc…90c6`](https://explorer-studio-dev.genlayer.com/tx/0x3e3578cce5a49d5af00ba60c974521b234a53e2ed416111367fc873915b290c6) |
-| App | `<APP_URL>` (frontend built with `VITE_NETWORK=studionext`) |
+| **App** | https://agent-arbiter-genlayer.vercel.app (Studio Next, chain 61997) |
 | Demo video | `<DEMO_VIDEO_URL>` |
 
 ### Transactions showing the consensus adjudication flow
