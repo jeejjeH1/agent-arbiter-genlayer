@@ -6,7 +6,7 @@
 //
 // Usage:
 //   node scripts/agent-worker.mjs <contractAddress> [pollMs]
-import { makeAccount, makeClient, fund, write, read } from './lib.mjs'
+import { makeAccount, makeClient, fund, write, read, NETWORK } from './lib.mjs'
 
 const CONTRACT = process.argv[2]
 const POLL_MS = Number(process.argv[3] || 5000)
@@ -16,7 +16,7 @@ if (!CONTRACT) {
   process.exit(1)
 }
 
-const account = makeAccount()
+const account = makeAccount(process.env.WORKER_KEY)
 const client = makeClient(account)
 
 const ZERO = '0x0000000000000000000000000000000000000000'
@@ -100,7 +100,7 @@ async function main() {
 }
 
 function NETWORK_LABEL() {
-  return process.env.NETWORK === 'testnet' ? 'Bradbury Testnet' : 'Localnet'
+  return `${NETWORK.name} (chain ${NETWORK.id})`
 }
 
 main().catch((e) => {

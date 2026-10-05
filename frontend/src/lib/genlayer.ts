@@ -2,18 +2,32 @@ import { createClient, createAccount, generatePrivateKey } from 'genlayer-js'
 import { localnet, testnetBradbury, studionet } from 'genlayer-js/chains'
 import type { GenLayerClient } from 'genlayer-js/types'
 
-export type NetworkId = 'localnet' | 'testnet' | 'studionet'
+export type NetworkId = 'studionext' | 'localnet' | 'testnet' | 'studionet'
+
+// GenLayer Studio Next (chain 61997). genlayer-js 1.x only ships the older
+// studionet preset (61999, studio.genlayer.com), so define it explicitly.
+export const studioNext = {
+  ...studionet,
+  id: 61997,
+  name: 'GenLayer Studio Next',
+  rpcUrls: { default: { http: ['https://studio-dev.genlayer.com/api'] } },
+  blockExplorers: {
+    default: { name: 'Studio Next Explorer', url: 'https://explorer-studio-dev.genlayer.com' },
+  },
+} as typeof studionet
 
 const CHAINS = {
+  studionext: studioNext,
   localnet,
   testnet: testnetBradbury,
   studionet,
 } as const
 
 export const NETWORK_LABEL: Record<NetworkId, string> = {
+  studionext: 'Studio Next · 61997',
   localnet: 'Localnet',
   testnet: 'Bradbury Testnet',
-  studionet: 'Studionet',
+  studionet: 'Studionet (legacy)',
 }
 
 const CONTRACT_ADDRESS =
@@ -53,7 +67,8 @@ export function getContractAddress(): string {
 }
 
 export function getNetwork(): NetworkId {
-  return (import.meta.env.VITE_NETWORK as NetworkId) || 'localnet'
+  const net = import.meta.env.VITE_NETWORK as NetworkId | undefined
+  return net && net in CHAINS ? net : 'studionext'
 }
 
 export function getSession(): Session {
@@ -85,6 +100,11 @@ export function resetAccount() {
     /* ignore */
   }
   session = null
+}
+
+export function explorerTxUrl(hash: string): string | null {
+  const url = CHAINS[getNetwork()].blockExplorers?.default?.url
+  return url ? `${url.replace(/\/$/, '')}/tx/${hash}` : null
 }
 
 export function shortAddress(addr: string): string {

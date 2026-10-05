@@ -268,6 +268,85 @@ def test_settle_requires_submitted(direct_vm, direct_deploy, direct_alice):
 
 
 # ----------------------------------------------------------------------
+# consensus (leader / validator)
+# ----------------------------------------------------------------------
+
+
+def _submitted(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = direct_deploy("contracts/agent_arbiter.py")
+    direct_vm.sender = direct_alice
+    direct_vm.value = 100
+    contract.create_task("t1", "spec", "criteria", FUTURE)
+    direct_vm.sender = direct_bob
+    direct_vm.value = 100
+    contract.accept_task("t1")
+    contract.submit_work("t1", "evidence")
+    return contract
+
+
+def test_settle_runs_through_validator_consensus(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True)
+    contract.settle("t1")
+
+    # A validator that independently reaches the same outcome agrees.
+    assert direct_vm.run_validator() is True
+
+
+def test_validator_ignores_reasoning_wording(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True)
+    contract.settle("t1")
+
+    direct_vm.clear_mocks()
+    direct_vm.mock_llm(
+        r".*impartial adjudicator.*",
+        json.dumps({"approved": True, "undetermined": False, "reasoning": "different words"}),
+    )
+    assert direct_vm.run_validator() is True
+
+
+def test_validator_disagrees_on_different_outcome(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True)
+    contract.settle("t1")
+
+    # The validator's own LLM run says REJECTED -> no consensus.
+    direct_vm.clear_mocks()
+    _judge_mock(direct_vm, approved=False)
+    assert direct_vm.run_validator() is False
+
+
+def test_validator_rejects_invalid_leader_outcome(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True)
+    contract.settle("t1")
+
+    assert direct_vm.run_validator(leader_result={"outcome": "PAY_ME", "reasoning": "x"}) is False
+    assert direct_vm.run_validator(leader_error=Exception("boom")) is False
+
+
+def test_settle_reverts_on_malformed_llm_output(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    direct_vm.mock_llm(r".*impartial adjudicator.*", json.dumps({"verdict": "yes"}))
+
+    with direct_vm.expect_revert("missing boolean decision fields"):
+        contract.settle("t1")
+
+    # Nothing was settled; the task can still be adjudicated later.
+    assert contract.get_task("t1")["status"] == "SUBMITTED"
+
+
+def test_settle_reverts_on_contradictory_verdict(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _submitted(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _judge_mock(direct_vm, approved=True, undetermined=True)
+
+    with direct_vm.expect_revert("contradictory"):
+        contract.settle("t1")
+    assert contract.get_task("t1")["status"] == "SUBMITTED"
+
+
+# ----------------------------------------------------------------------
 # views
 # ----------------------------------------------------------------------
 

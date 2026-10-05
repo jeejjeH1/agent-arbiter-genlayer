@@ -75,6 +75,22 @@ function normalize(raw: RawTask): Task {
   }
 }
 
+// Burner accounts start empty. Localnet and Studio Next expose
+// sim_fundAccount, so top the account up once per session before the first
+// payable call. Bradbury needs the faucet instead.
+let fundAttempted = false
+async function ensureFunded(): Promise<void> {
+  if (fundAttempted) return
+  fundAttempted = true
+  const { client, address, network } = getSession()
+  if (network === 'testnet') return
+  try {
+    await (client as any).fundAccount({ address: address as `0x${string}`, amount: Number(100n * 10n ** 18n) })
+  } catch {
+    /* network may not support funding; the write will surface any balance error */
+  }
+}
+
 async function waitForResult(hash: string): Promise<void> {
   const { client } = getSession()
   const receipt = await client.waitForTransactionReceipt({
@@ -93,6 +109,7 @@ export async function createTask(params: {
   deadline: string
   rewardWei: bigint
 }): Promise<string> {
+  await ensureFunded()
   const { client } = getSession()
   const address = getContractAddress()
   const hash = await client.writeContract({
@@ -106,6 +123,7 @@ export async function createTask(params: {
 }
 
 export async function acceptTask(id: string, stakeWei: bigint): Promise<string> {
+  await ensureFunded()
   const { client } = getSession()
   const address = getContractAddress()
   const hash = await client.writeContract({
